@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+
+#or
+
+#!usr/bin/env -S uv run --script
+
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "cryptography",
+#     "pyperclip"
+# ]
+# ///
+
+
 from cryptography.fernet import Fernet
 from sys import argv, exit
 import pyperclip
