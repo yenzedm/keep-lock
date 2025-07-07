@@ -1,10 +1,18 @@
-# Password Manager CLI
+# 🔒 Secure Password Manager
 
-A simple command-line password manager for securely storing and retrieving passwords.
+A secure command-line password manager that encrypts data using AES-256 (Fernet) with PBKDF2 key derivation. All passwords are protected by a master password and never stored in plaintext.
 
-## Usage
+## Features
 
-use ./kp.py add service pass - add service and password  
-use ./kp.py get service - get specified service  
-use ./kp.py all - view all services  
-use ./kp.py delete service - delete specified service  
+- 🔐 Military-grade encryption (AES-256)
+- 🛡 Master password protection
+- 📋 Copy to clipboard functionality
+- 📁 Single encrypted vault file
+
+## Installation
+
+1. Ensure you have Python 3.8+ installed
+2. Install required packages:
+
+```bash
+pip install cryptography pyperclip
