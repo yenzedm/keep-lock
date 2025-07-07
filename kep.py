@@ -13,102 +13,166 @@
 # ///
 
 
-from cryptography.fernet import Fernet
-from sys import argv, exit
-import pyperclip
-import json
 import os
+import json
+import base64
+import argparse
+from getpass import getpass
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import pyperclip
+from typing import Dict
 
+# Constants
+DATA_FILE = "passwords.enc"
+DEFAULT_ITERATIONS = 600_000
+SALT_SIZE = 16  # Salt size in bytes (128 бит)
 
-KEY_FILE = "secret.key"
+class KeepLock:
+    def __init__(self):
+        pass
 
-def load_key():
-    if not os.path.exists(KEY_FILE):
-        key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as key_file:
-            key_file.write(key)
-    else:
-        with open(KEY_FILE, "rb") as key_file:
-            key = key_file.read()
-    return Fernet(key)
+    def _get_cipher(self, password: str) -> Fernet:
+        """Generates or loads salt and creates an encryption object"""
+        # Read or create salt
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "rb") as f:
+                salt = f.read(SALT_SIZE)
+        else:
+            salt = os.urandom(SALT_SIZE)
+            with open(DATA_FILE, "wb") as f:
+                f.write(salt)  # We write down only the salt, we will add the data later
 
-cipher = load_key()
+        # Generating a key
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=DEFAULT_ITERATIONS,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        return Fernet(key)
 
-DATA_FILE = "passwords.json"
+    def _load_data(self, cipher: Fernet) -> Dict[str, str]:
+        """Loads and decrypts data"""
+        try:
+            with open(DATA_FILE, "rb") as f:
+                f.read(SALT_SIZE)  # Skip the salt
+                encrypted_data = f.read()
+                
+                if not encrypted_data:
+                    return {}
+                    
+                return json.loads(cipher.decrypt(encrypted_data).decode())
+        except Exception:
+            print("Error: Invalid password or corrupted data")
+            exit(1)
 
-def load_passwords():
-    try:
-        if not os.path.exists(DATA_FILE):
-            return {}
-        with open(DATA_FILE, "r") as f:
-            encrypted_data = f.read()
-            if not encrypted_data:
-                return {}
-            decrypted_data = cipher.decrypt(encrypted_data.encode()).decode()
-            return json.loads(decrypted_data)
-    except:
-        print("Try again")
-        exit(1)
+    def _save_data(self, cipher: Fernet, data: Dict[str, str]):
+        """Encrypts and saves data (salt is already in the file)"""
+        with open(DATA_FILE, "r+b") as f:
+            f.seek(SALT_SIZE)  # Moving on after the salt
+            encrypted_data = cipher.encrypt(json.dumps(data).encode())
+            f.write(encrypted_data)
+            f.truncate()  # cut off the excess if the new data is shorter than the old ones
+
+    def add_password(self, service: str, password: str):
+        """Adds a new password"""
+        master_password = getpass("Enter master password: ")
+        cipher = self._get_cipher(master_password)
+        passwords = self._load_data(cipher)
+        passwords[service] = password
+        self._save_data(cipher, passwords)
+        print(f"✓ Password for '{service}' saved")
+
+    def get_password(self, service: str, to_clipboard: bool = False):
+        """Gets the password"""
+        master_password = getpass("Enter master password: ")
+        cipher = self._get_cipher(master_password)
+        passwords = self._load_data(cipher)
         
+        if service not in passwords:
+            print(f"✗ Service '{service}' not found")
+            return
+            
+        if to_clipboard:
+            pyperclip.copy(passwords[service])
+            print("✓ The password has been copied to the clipboard")
+        else:
+            print(f"Password for '{service}': {passwords[service]}")
 
-def save_passwords(passwords):
-    encrypted_data = cipher.encrypt(json.dumps(passwords).encode())
-    with open(DATA_FILE, "w") as f:
-        f.write(encrypted_data.decode())
-
-def add_password(service, password):
-    passwords = load_passwords()
-    passwords[service] = password
-    save_passwords(passwords)
-    print(f"Info: password for {service} saved.")
-
-def get_password(service):
-    passwords = load_passwords()
-    if service in passwords:
-        print(f"Info: password for {service}: {passwords[service]}")
-    else:
-        print("Err: service not found")
-
-def delete_password(service):
-    passwords = load_passwords()
-    if service in passwords:
+    def delete_password(self, service: str):
+        """Removes the password"""
+        master_password = getpass("Enter master password: ")
+        cipher = self._get_cipher(master_password)
+        passwords = self._load_data(cipher)
+        
+        if service not in passwords:
+            print(f"✗ Service '{service}' not found")
+            return
+            
         del passwords[service]
-        save_passwords(passwords)
-        print(f"Info: password for {service} deleted")
-    else:
-        print("Err: service not found")
+        self._save_data(cipher, passwords)
+        print(f"✓ Password for '{service}' deleted")
 
-def get_password_clipboard(service):
-    passwords = load_passwords()
-    if service in passwords:
-        pyperclip.copy(passwords[service])
-        print(f"Info: password copied to the clipboard")
-    else:
-        print("Err: service not found")
+    def list_services(self):
+        """Displays a list of all services"""
+        master_password = getpass("Enter master password: ")
+        cipher = self._get_cipher(master_password)
+        passwords = self._load_data(cipher)
+        
+        if not passwords:
+            print("✗ No saved passwords")
+            return
+            
+        print("Saved services:")
+        for service in sorted(passwords.keys()):
+            print(f"• {service}")
 
-def get_all_service():
-    passwords = load_passwords()
-    for service_name in passwords:
-        print(service_name)
+def main():
+    parser = argparse.ArgumentParser(
+        description="🔐 Encrypted password manager",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Help for add a password
+    add_parser = subparsers.add_parser("add", help="Add password")
+    add_parser.add_argument("service", help="Service name (for example: github)")
+    add_parser.add_argument("password", help="Password (if not specified, will be requested)", 
+                          nargs="?", default=None)
+
+    # Help for get password
+    get_parser = subparsers.add_parser("get", help="Get password")
+    get_parser.add_argument("service", help="Service name")
+    get_parser.add_argument("-c", "--clipboard", action="store_true",
+                          help="Copy to clipboard")
+
+    # Help for delete password
+    del_parser = subparsers.add_parser("delete", help="Remove password")
+    del_parser.add_argument("service", help="Service name")
+
+    # Help for list of services
+    list_parser = subparsers.add_parser("list", help="Show all services")
+
+    args = parser.parse_args()
+    pm = KeepLock()
+
+    try:
+        if args.command == "add":
+            password = args.password if args.password else getpass("Enter the password for the service: ")
+            pm.add_password(args.service, password)
+        elif args.command == "get":
+            pm.get_password(args.service, args.clipboard)
+        elif args.command == "delete":
+            pm.delete_password(args.service)
+        elif args.command == "list":
+            pm.list_services()
+    except KeyboardInterrupt:
+        print("\nCanceled by user")
+    except Exception as e:
+        print(f"⚠️ Error: {str(e)}")
 
 if __name__ == "__main__":
-    func = argv[1] if len(argv) > 1 else None
-    service = argv[2] if len(argv) > 2 else None
-    password = argv[3] if len(argv) > 3 else None
-    if func == "get":
-        tmp = input("clipboard(cb) or output(out)? Enter cb or out: ")
-        if tmp == "cb":
-            get_password_clipboard(service)
-        elif tmp == "out":
-            get_password(service)
-    elif func == "delete":
-        delete_password(service)
-    elif func == "add":
-        add_password(service, password)
-    elif func == "all":
-        get_all_service()
-    else:
-        print("use ./kp.py add service pass - add service and password")
-        print("use ./kp.py get service - get specified service")
-        print("use ./kp.py all - view all services")
-        print("use ./kp.py delete service - delete specified service")      
+    main()
